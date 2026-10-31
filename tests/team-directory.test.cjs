@@ -44,6 +44,7 @@ async function load() {
     }
   });
   vm.runInContext(fs.readFileSync(path.join(root, 'data/teams.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'data/ratings.js'), 'utf8'), context);
   vm.runInContext(source, context);
   await new Promise(resolve => setImmediate(resolve));
   const directory = JSON.parse(vm.runInContext('JSON.stringify(NCAA_D1_DIRECTORY)', context));
@@ -62,7 +63,7 @@ test('2026–27 directory contains 365 distinct NCAA programs and no invented ra
   }
   assert.ok(directory.teams.some(t => t.ncaaId === 11740 && t.name === 'West Florida'));
   assert.ok(!directory.teams.some(t => /Saint Francis|St\. Francis/.test(t.officialName)));
-  assert.equal(ratings.length, 191);
+  assert.equal(ratings.length, 365);
   for (const rated of ratings) assert.ok(directory.teams.some(t => t.name === rated.name), rated.name);
   if (process.env.NCAA_DIRECTORY_SNAPSHOT) {
     const official = JSON.parse(fs.readFileSync(process.env.NCAA_DIRECTORY_SNAPSHOT, 'utf8'));
@@ -83,9 +84,9 @@ test('every program appears exactly once in both dropdowns with correct rating s
   for (const id of ['away', 'home']) {
     const options = elements.get(id).options;
     assert.deepEqual(options.map(o => o.value), expected);
-    for (const option of options) assert.equal(option.text, option.value + (rated.has(option.value) ? '' : ' · unrated'));
+    for (const option of options) assert.equal(option.text, option.value + (ratings.find(t => t.name === option.value)?.source === 'torvik' ? ' · supplemental' : rated.has(option.value) ? '' : ' · unrated'));
   }
-  assert.equal(pill.textContent, '191 rated · 365 listed');
+  assert.equal(pill.textContent, '365 rated · 365 listed');
   assert.match(elements.get('directoryStatus').textContent, /365 NCAA Division I/);
 });
 test('all 730 team selections calculate or show unavailable ratings without fabricating scores', async () => {
@@ -99,7 +100,8 @@ test('all 730 team selections calculate or show unavailable ratings without fabr
       elements.get(id).listeners.input();
       if (rated.has(team.name)) {
         assert.ok(Number.isFinite(Number(elements.get('total').textContent)), `${id}: ${team.name}`);
-        assert.equal(elements.get('coverageWarning').textContent, '');
+        if (ratings.find(t => t.name === team.name).source === 'torvik') assert.match(elements.get('coverageWarning').textContent, /Supplemental Bart Torvik/);
+        else assert.equal(elements.get('coverageWarning').textContent, '');
       } else {
         for (const metric of ['awayscore', 'homescore', 'spread', 'total', 'half', 'halfspread', 'awaytotal', 'hometotal', 'spreadedge', 'totaledge']) assert.equal(elements.get(metric).textContent, '—');
         assert.ok(elements.get('coverageWarning').textContent.includes(team.name));
@@ -115,9 +117,41 @@ test('all 730 team selections calculate or show unavailable ratings without fabr
 });
 test('rankings and the daily scoreboard still initialize', async () => {
   const { elements, fetches } = await load();
-  assert.equal((elements.get('ratingrows').innerHTML.match(/<tr>/g) || []).length, 191);
-  assert.equal(elements.get('count').textContent, '191 of 191 rated teams');
+  assert.equal((elements.get('ratingrows').innerHTML.match(/<tr>/g) || []).length, 365);
+  assert.equal(elements.get('count').textContent, '365 of 365 rated teams');
   assert.deepEqual(fetches, ['./data/daily.json']);
   assert.match(elements.get('daily-status').textContent, /Schedule date: 2026-10-30/);
   assert.match(elements.get('daily-games').innerHTML, /Memphis 70 @ Iowa State 75 · Final/);
+});
+
+test('all ratings are finite, identified, and traceable to a published source', async () => {
+  const { directory, ratings, context } = await load();
+  const metadata = JSON.parse(vm.runInContext('JSON.stringify(NCAA_D1_RATINGS)', context));
+  assert.equal(new Set(ratings.map(t => t.ncaaId)).size, 365);
+  assert.equal(new Set(ratings.map(t => t.name)).size, 365);
+  assert.equal(ratings.filter(t => t.source === 'highlights').length, 358);
+  assert.equal(ratings.filter(t => t.source === 'torvik').length, 7);
+  for (const rating of ratings) {
+    assert.ok(Number.isFinite(rating.off) && rating.off > 0);
+    assert.ok(Number.isFinite(rating.def) && rating.def > 0);
+    assert.ok(metadata.sources[rating.source]?.url.startsWith('https://'));
+    assert.equal(directory.teams.find(t => t.ncaaId === rating.ncaaId)?.name, rating.name);
+  }
+  if (process.env.HIGHLIGHTS_RATINGS_SNAPSHOT) {
+    const aliases = { 'New Orleans': 'LSU New Orleans', 'San José State': 'San Jose State' };
+    const rows = JSON.parse(fs.readFileSync(process.env.HIGHLIGHTS_RATINGS_SNAPSHOT, 'utf8'));
+    const published = new Map(rows.map(t => [aliases[t.name] || t.name, t]));
+    for (const team of ratings.filter(t => t.source === 'highlights')) {
+      assert.equal(team.off, published.get(team.name)?.off);
+      assert.equal(team.def, published.get(team.name)?.def);
+    }
+  }
+});
+test('missing source data still produces no fabricated projection', async () => {
+  const { elements, context } = await load();
+  vm.runInContext("TEAMS.splice(TEAMS.findIndex(t => t.name === 'West Florida'), 1)", context);
+  elements.get('away').value = 'West Florida';
+  elements.get('away').listeners.input();
+  for (const id of ['awayscore', 'homescore', 'total', 'spread']) assert.equal(elements.get(id).textContent, '—');
+  assert.match(elements.get('coverageWarning').textContent, /Ratings unavailable for West Florida/);
 });
