@@ -1,10 +1,10 @@
+
 name: CBB Edge Lab Morning Refresh
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 13 * * *"
-      timezone: "America/Chicago"
+    - cron: "0 13,14 * * *"
 
 permissions:
   contents: write
@@ -14,11 +14,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Update daily scoreboard
-        run: python refresh_daily.py
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            HOUR=$(TZ=America/Chicago date +%H)
+            if [ "$HOUR" != "08" ]; then
+              echo "Not 8 AM Central. Skipping refresh."
+              exit 0
+            fi
+          fi
+          python refresh_daily.py
+
       - name: Save updated data
         run: |
           git config user.name "github-actions[bot]"
