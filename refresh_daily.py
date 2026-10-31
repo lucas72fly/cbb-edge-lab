@@ -1,38 +1,92 @@
-#!/usr/bin/env python3
-"""Refresh today's NCAA D-I men's basketball scoreboard. Fails closed, preserving prior snapshot."""
-import datetime as dt,json,os,pathlib,urllib.request
+
+import datetime as dt
+import json
+import pathlib
+import urllib.request
 from zoneinfo import ZoneInfo
-ROOT=pathlib.Path(__file__).parent
-TZ=ZoneInfo("America/Chicago")
-now=dt.datetime.now(TZ)
-day=now.date()
-# Public community NCAA wrapper: https://github.com/henrygd/ncaa-api
-BASE=os.getenv("NCAA_API_BASE","https://ncaa-api.henrygd.me").rstrip("/")
-url=f"{BASE}/scoreboard/basketball-men/d1/{day:%Y/%m/%d}/all-conf"
-def normalize(x):
-    games=x.get("games",[]) if isinstance(x,dict) else []
-    out=[]
-    for entry in games:
-        game=entry.get("game",entry) if isinstance(entry,dict) else {}
-        a=game.get("away",{});h=game.get("home",{})
-        if not isinstance(a,dict) or not isinstance(h,dict):continue
-        def team(t):return t.get("names",{}).get("short") if isinstance(t.get("names"),dict) else t.get("name") or t.get("shortName") or t.get("teamName")
-        def score(t):
-            v=t.get("score")
-            try:return int(v) if v is not None and str(v).strip() else None
-            except (ValueError,TypeError):return None
-        out.append({"away":team(a),"home":team(h),"away_score":score(a),"home_score":score(h),"state":game.get("gameState") or game.get("state") or game.get("status") or "Scheduled"})
-    return out
-req=urllib.request.Request(url,headers={"User-Agent":"CBBEdgeLab/0.1 (public data refresh)","Accept":"application/json"})
+
+ROOT = pathlib.Path(__file__).resolve().parent
+now = dt.datetime.now(ZoneInfo("America/Chicago"))
+day = now.date()
+
+url = (
+    "https://site.api.espn.com/apis/site/v2/sports/basketball/"
+    f"mens-college-basketball/scoreboard?dates={day:%Y%m%d}&limit=500&groups=50"
+)
+
+request = urllib.request.Request(
+    url,
+    headers={
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+    },
+)
+
 try:
-    with urllib.request.urlopen(req,timeout=25) as response: payload=json.load(response)
-    if not isinstance(payload,dict) or "games" not in payload:raise ValueError("Unexpected API response; refusing overwrite")
-    games=normalize(payload)
-    dest=ROOT/"data/daily.json"
-    tmp=dest.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"date":day.isoformat(),"updated_at":now.isoformat(timespec="minutes"),"status":"NCAA scoreboard snapshot","games":games},indent=2))
-    tmp.replace(dest)
-    print("Refreshed",len(games),"games for",day)
-except Exception as exc:
-    print("Refresh failed; previous snapshot retained:",exc)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        payload = json.load(response)
+
+    if not isinstance(payload.get("events"), list):
+        raise ValueError("Invalid scoreboard response")
+
+    games = []
+
+    for event in payload["events"]:
+        competitions = event.get("competitions") or []
+        if not competitions:
+            continue
+
+        competition = competitions[0]
+        teams = {
+            team.get("homeAway"): team
+            for team in competition.get("competitors", [])
+        }
+
+        away = teams.get("away")
+        home = teams.get("home")
+        if not away or not home:
+            continue
+
+        def name(entry):
+            team = entry.get("team") or {}
+            return team.get("displayName", "Unknown")
+
+        def score(entry):
+            value = entry.get("score")
+            try:
+                return int(value) if value not in (None, "") else None
+            except (ValueError, TypeError):
+                return None
+
+        status = competition.get("status") or event.get("status") or {}
+        state = (status.get("type") or {}).get("description", "Scheduled")
+
+        games.append({
+            "away": name(away),
+            "home": name(home),
+            "away_score": score(away),
+            "home_score": score(home),
+            "state": state,
+        })
+
+    if payload["events"] and not games:
+        raise ValueError("Could not parse scoreboard games")
+
+    destination = ROOT / "data" / "daily.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    snapshot = {
+        "date": day.isoformat(),
+        "updated_at": now.isoformat(),
+        "games": games,
+    }
+
+    temporary = destination.with_suffix(".tmp")
+    temporary.write_text(json.dumps(snapshot, indent=2))
+    temporary.replace(destination)
+
+    print(f"Refreshed {len(games)} games for {day}")
+
+except Exception as error:
+    print(f"Refresh failed: {error}")
     raise SystemExit(1)
