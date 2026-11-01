@@ -1,5 +1,20 @@
 {
-  "date": "2026-10-30",
-  "updated_at": "2026-10-30T20:20:38.956681-05:00",
-  "games": []
+  "date": "2026-11-01",
+  "updated_at": "2026-11-01T13:19:19.862288-06:00",
+  "games": [
+    {
+      "away": "Notre Dame Fighting Irish",
+      "home": "Villanova Wildcats",
+      "away_score": 74,
+      "home_score": 72,
+      "state": "Final"
+    },
+    {
+      "away": "Liberty Flames",
+      "home": "High Point Panthers",
+      "away_score": 0,
+      "home_score": 0,
+      "state": "Scheduled"
+    }
+  ]
 }
